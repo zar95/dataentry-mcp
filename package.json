@@ -1,0 +1,27 @@
+{
+  "name": "mongodb-mcp-server",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MCP server for MongoDB operations",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "mcp",
+    "mongodb"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.2",
+    "dotenv": "^16.3.1",
+    "googleapis": "^170.1.0",
+    "mongodb": "^6.3.0",
+    "open": "^11.0.0",
+    "pdf-parse": "^2.4.5",
+    "pdf-to-png-converter": "^3.11.0",
+    "tesseract.js": "^7.0.0",
+    "xlsx": "^0.18.5"
+  }
+}
