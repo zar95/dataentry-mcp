@@ -43,22 +43,34 @@ const SCOPES = [
 
 async function getAuthenticatedClient() {
   let credentials;
+  // Use environment variable for credentials if available
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
     credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
   } else {
+    // Fallback for local development
     const content = await fs.readFile(path.join(__dirname, "credentials.json"));
     credentials = JSON.parse(content);
   }
+  
   const { client_secret, client_id, redirect_uris } =
     credentials.installed || credentials.web;
   const rUri = process.env.REDIRECT_URI || redirect_uris[0];
   const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, rUri);
+
   try {
-    const token = await fs.readFile(TOKEN_PATH);
+    let token;
+    // UPDATED: Check for GMAIL_TOKEN_JSON environment variable first for Railway
+    if (process.env.GMAIL_TOKEN_JSON) {
+      token = process.env.GMAIL_TOKEN_JSON;
+    } else {
+      // Fallback to local token.json file for local testing
+      token = await fs.readFile(TOKEN_PATH, 'utf8');
+    }
+    
     oAuth2Client.setCredentials(JSON.parse(token));
     return oAuth2Client;
   } catch (err) {
-    throw new Error("Missing token.json. Run auth script locally first.");
+    throw new Error("Missing GMAIL_TOKEN_JSON environment variable or token.json file.");
   }
 }
 
