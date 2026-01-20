@@ -2,10 +2,10 @@
   "name": "mongodb-mcp-server",
   "version": "1.0.0",
   "type": "module",
-  "description": "MCP server for MongoDB operations",
-  "main": "index.js",
+  "description": "MCP server for email to database automation",
+  "main": "gmail.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "concurrently \"node gmail.js\" \"node index.js\" \"node excel.js\""
   },
   "keywords": [
     "mcp",
@@ -15,6 +15,7 @@
   "license": "ISC",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.2",
+    "concurrently": "^9.2.1",
     "dotenv": "^16.3.1",
     "express": "^5.2.1",
     "googleapis": "^170.1.0",
