@@ -1,22 +1,24 @@
+import express from "express";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { google } from 'googleapis';
 import fs from 'fs/promises';
 import path from 'path';
-import open from 'open';
-import http from 'http';
 import { fileURLToPath } from 'url';
 import sharp from 'sharp';
 import * as XLSX from 'xlsx';
 import mammoth from 'mammoth';
 import TurndownService from 'turndown';
 
+// --- CONFIGURATION ---
+const app = express();
+app.use(express.json());
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOKEN_PATH = path.join(__dirname, 'token.json');
-const CREDENTIALS_PATH = path.join(__dirname, 'credentials.json');
 
-// Note: Added 'gmail.send' and 'gmail.compose' to scopes
+// SCOPES for Gmail
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.modify',
@@ -26,52 +28,47 @@ const SCOPES = [
 
 /**
  * AUTHENTICATION LOGIC
+ * Pulls credentials from Environment Variable "GOOGLE_CREDENTIALS_JSON" 
+ * to avoid keeping secret files in GitHub.
  */
 async function getAuthenticatedClient() {
-  const content = await fs.readFile(CREDENTIALS_PATH);
-  const credentials = JSON.parse(content);
-  const { client_secret, client_id } = credentials.installed || credentials.web;
-  const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, 'http://localhost:3000');
+  let credentials;
+  if (process.env.GOOGLE_CREDENTIALS_JSON) {
+    credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+  } else {
+    // Fallback for local testing
+    const content = await fs.readFile(path.join(__dirname, 'credentials.json'));
+    credentials = JSON.parse(content);
+  }
+
+  const { client_secret, client_id, redirect_uris } = credentials.installed || credentials.web;
+  
+  // NOTE: On Render, ensure your Google Cloud Console has your onrender.com URL in 'Redirect URIs'
+  const rUri = process.env.REDIRECT_URI || redirect_uris[0];
+  const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, rUri);
 
   try {
     const token = await fs.readFile(TOKEN_PATH);
     oAuth2Client.setCredentials(JSON.parse(token));
     return oAuth2Client;
   } catch (err) {
-    return await getNewToken(oAuth2Client);
+    throw new Error("No token found. Please run the local auth script first to generate token.json.");
   }
 }
 
-async function getNewToken(oAuth2Client) {
-  const authUrl = oAuth2Client.generateAuthUrl({ access_type: 'offline', scope: SCOPES, prompt: 'consent' });
-  console.error('\n--- GMAIL AUTH REQUIRED ---\n', authUrl, '\n');
-  await open(authUrl);
-  return new Promise((resolve, reject) => {
-    const server = http.createServer(async (req, res) => {
-      try {
-        const url = new URL(req.url, 'http://localhost:3000');
-        const code = url.searchParams.get('code');
-        res.end('Auth Success! You can close this tab.');
-        server.close();
-        const { tokens } = await oAuth2Client.getToken(code);
-        oAuth2Client.setCredentials(tokens);
-        await fs.writeFile(TOKEN_PATH, JSON.stringify(tokens));
-        resolve(oAuth2Client);
-      } catch (e) { reject(e); }
-    }).listen(3000);
-  });
-}
-
-/**
- * MCP SERVER SETUP
- */
-const server = new Server({ name: "gmail-mcp-server", version: "1.5.0" }, { capabilities: { tools: {} } });
+// --- MCP SERVER SETUP ---
+const server = new Server({ 
+  name: "gmail-mcp-server-remote", 
+  version: "1.6.0" 
+}, { 
+  capabilities: { tools: {} } 
+});
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "search_emails",
-      description: "Search emails using Gmail operators (e.g., 'has:attachment filename:xlsx')",
+      description: "Search emails using Gmail operators",
       inputSchema: { type: "object", properties: { query: { type: "string" }, maxResults: { type: "number", default: 5 } } }
     },
     {
@@ -80,33 +77,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: "object", properties: { messageId: { type: "string" } }, required: ["messageId"] }
     },
     {
-      name: "get_attachment",
-      description: "Retrieves attachment and converts it in-memory to an AI-readable format (Markdown/CSV/Image).",
-      inputSchema: {
-        type: "object",
-        properties: {
-          messageId: { type: "string" },
-          attachmentId: { type: "string" },
-          mimeType: { type: "string" },
-          filename: { type: "string" }
-        },
-        required: ["messageId", "attachmentId", "mimeType"]
-      }
-    },
-    {
       name: "send_email",
       description: "Send a customized email. Supports plain text or HTML.",
       inputSchema: {
         type: "object",
         properties: {
-          to: { type: "string", description: "Recipient email address" },
-          subject: { type: "string", description: "Email subject line" },
-          body: { type: "string", description: "The content of the email. Can be plain text or HTML." },
-          isHtml: { type: "boolean", description: "Set to true if the body contains HTML tags.", default: false }
+          to: { type: "string" },
+          subject: { type: "string" },
+          body: { type: "string" },
+          isHtml: { type: "boolean", default: false }
         },
         required: ["to", "subject", "body"]
       }
-    }
+    },
+    {
+        name: "get_attachment",
+        description: "Retrieves and processes attachments (Excel, Word, Images, PDF)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            messageId: { type: "string" },
+            attachmentId: { type: "string" },
+            mimeType: { type: "string" },
+            filename: { type: "string" }
+          },
+          required: ["messageId", "attachmentId", "mimeType"]
+        }
+      }
   ]
 }));
 
@@ -130,94 +127,78 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "send_email": {
         const { to, subject, body, isHtml } = args;
         const contentType = isHtml ? 'text/html' : 'text/plain';
-
-        // Encode subject for UTF-8 support (emojis/special chars)
         const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
-
-        const messageParts = [
+        const message = [
           `To: ${to}`,
           `Content-Type: ${contentType}; charset=utf-8`,
           `MIME-Version: 1.0`,
           `Subject: ${utf8Subject}`,
           '',
           body
-        ];
-        const message = messageParts.join('\n');
+        ].join('\n');
 
-        // Base64URL encoding as required by Gmail API
-        const encodedMessage = Buffer.from(message)
-          .toString('base64')
-          .replace(/\+/g, '-')
-          .replace(/\//g, '_')
-          .replace(/=+$/, '');
-
-        const res = await gmail.users.messages.send({
-          userId: 'me',
-          requestBody: { raw: encodedMessage }
-        });
-
-        return {
-          content: [{ type: "text", text: `Email sent to ${to}. ID: ${res.data.id}` }]
-        };
+        const encodedMessage = Buffer.from(message).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        const res = await gmail.users.messages.send({ userId: 'me', requestBody: { raw: encodedMessage } });
+        return { content: [{ type: "text", text: `Email sent. ID: ${res.data.id}` }] };
       }
 
       case "get_attachment": {
-        const res = await gmail.users.messages.attachments.get({
-          userId: 'me',
-          messageId: args.messageId,
-          id: args.attachmentId
-        });
-
-        if (!res.data?.data) throw new Error("No attachment data found.");
-
+        const res = await gmail.users.messages.attachments.get({ userId: 'me', messageId: args.messageId, id: args.attachmentId });
         const buffer = Buffer.from(res.data.data, 'base64url');
         let mimeType = args.mimeType.toLowerCase();
-        const filename = (args.filename || "").toLowerCase();
-
-        if (mimeType === 'application/octet-stream' || !mimeType) {
-          if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) mimeType = 'excel';
-          else if (filename.endsWith('.docx') || filename.endsWith('.doc')) mimeType = 'word';
-          else if (filename.endsWith('.pdf')) mimeType = 'application/pdf';
-          else if (filename.match(/\.(jpg|jpeg|png|webp)$/)) mimeType = 'image/png';
-        }
 
         if (mimeType.startsWith('image/')) {
-          const pngBuffer = await sharp(buffer).png().toBuffer();
-          return { content: [{ type: "image", data: pngBuffer.toString('base64'), mimeType: "image/png" }] };
+          const png = await sharp(buffer).png().toBuffer();
+          return { content: [{ type: "image", data: png.toString('base64'), mimeType: "image/png" }] };
         }
-
-        if (mimeType.includes('spreadsheet') || mimeType.includes('excel') || mimeType === 'excel') {
+        if (mimeType.includes('excel') || mimeType.includes('spreadsheet')) {
           const wb = XLSX.read(buffer, { type: 'buffer' });
-          const csv = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]], { blankrows: false });
-          return { content: [{ type: "text", text: `Sheet: ${wb.SheetNames[0]}\n\n${csv}` }] };
+          const csv = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
+          return { content: [{ type: "text", text: csv }] };
         }
-
-        if (mimeType.includes('wordprocessingml') || mimeType.includes('msword') || mimeType === 'word') {
-          const { value: html } = await mammoth.convertToHtml({ buffer });
-          const markdown = new TurndownService().turndown(html);
-          return { content: [{ type: "text", text: markdown }] };
+        if (mimeType.includes('word')) {
+            const { value } = await mammoth.convertToHtml({ buffer });
+            const md = new TurndownService().turndown(value);
+            return { content: [{ type: "text", text: md }] };
         }
-
-        if (mimeType === 'application/pdf') {
-          return {
-            content: [
-              { type: "text", text: "[PDF Attachment Detected.]" },
-              { type: "resource", resource: { uri: `attachment://${args.messageId}/${args.attachmentId}`, mimeType: "application/pdf", blob: buffer.toString('base64') } }
-            ]
-          };
-        }
-
-        return { content: [{ type: "text", text: `Downloaded ${filename}.` }] };
+        return { content: [{ type: "text", text: "File downloaded. Check raw data if needed." }] };
       }
 
-      default: throw new Error(`Unknown tool: ${name}`);
+      default: throw new Error(`Tool not found: ${name}`);
     }
   } catch (error) {
-    console.error(`[Error] ${name}:`, error);
     return { content: [{ type: "text", text: error.message }], isError: true };
   }
 });
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
-console.error("Gmail MCP Server active with Send capabilities.");
+// --- SSE SESSION MANAGEMENT ---
+const sessions = new Map();
+
+app.get("/sse", async (req, res) => {
+  const transport = new SSEServerTransport("/messages", res);
+  const sessionId = transport.sessionId;
+  sessions.set(sessionId, transport);
+
+  console.error(`[SSE] Connected: ${sessionId}`);
+  res.on('close', () => {
+    sessions.delete(sessionId);
+    console.error(`[SSE] Disconnected: ${sessionId}`);
+  });
+
+  await server.connect(transport);
+});
+
+app.post("/messages", async (req, res) => {
+  const sessionId = req.query.sessionId;
+  const transport = sessions.get(sessionId);
+  if (transport) {
+    await transport.handlePostMessage(req, res);
+  } else {
+    res.status(404).send("Session expired.");
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.error(`MCP Server live at http://localhost:${PORT}`);
+});
