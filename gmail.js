@@ -16,10 +16,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOKEN_PATH = path.join(__dirname, 'token.json');
 const CREDENTIALS_PATH = path.join(__dirname, 'credentials.json');
 
+// Note: Added 'gmail.send' and 'gmail.compose' to scopes
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.modify',
-  'https://www.googleapis.com/auth/gmail.send'
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.compose'
 ];
 
 /**
@@ -63,7 +65,7 @@ async function getNewToken(oAuth2Client) {
 /**
  * MCP SERVER SETUP
  */
-const server = new Server({ name: "gmail-mcp-server", version: "1.4.0" }, { capabilities: { tools: {} } });
+const server = new Server({ name: "gmail-mcp-server", version: "1.5.0" }, { capabilities: { tools: {} } });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
@@ -90,6 +92,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ["messageId", "attachmentId", "mimeType"]
       }
+    },
+    {
+      name: "send_email",
+      description: "Send a customized email. Supports plain text or HTML.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          to: { type: "string", description: "Recipient email address" },
+          subject: { type: "string", description: "Email subject line" },
+          body: { type: "string", description: "The content of the email. Can be plain text or HTML." },
+          isHtml: { type: "boolean", description: "Set to true if the body contains HTML tags.", default: false }
+        },
+        required: ["to", "subject", "body"]
+      }
     }
   ]
 }));
@@ -111,6 +127,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: "text", text: JSON.stringify(res.data) }] };
       }
 
+      case "send_email": {
+        const { to, subject, body, isHtml } = args;
+        const contentType = isHtml ? 'text/html' : 'text/plain';
+
+        // Encode subject for UTF-8 support (emojis/special chars)
+        const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
+
+        const messageParts = [
+          `To: ${to}`,
+          `Content-Type: ${contentType}; charset=utf-8`,
+          `MIME-Version: 1.0`,
+          `Subject: ${utf8Subject}`,
+          '',
+          body
+        ];
+        const message = messageParts.join('\n');
+
+        // Base64URL encoding as required by Gmail API
+        const encodedMessage = Buffer.from(message)
+          .toString('base64')
+          .replace(/\+/g, '-')
+          .replace(/\//g, '_')
+          .replace(/=+$/, '');
+
+        const res = await gmail.users.messages.send({
+          userId: 'me',
+          requestBody: { raw: encodedMessage }
+        });
+
+        return {
+          content: [{ type: "text", text: `Email sent to ${to}. ID: ${res.data.id}` }]
+        };
+      }
+
       case "get_attachment": {
         const res = await gmail.users.messages.attachments.get({
           userId: 'me',
@@ -120,14 +170,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (!res.data?.data) throw new Error("No attachment data found.");
 
-        // Fix: Gmail uses base64url encoding
         const buffer = Buffer.from(res.data.data, 'base64url');
-        console.error(`[get_attachment] Processing ${args.filename || 'file'} (${buffer.length} bytes)`);
-
         let mimeType = args.mimeType.toLowerCase();
         const filename = (args.filename || "").toLowerCase();
 
-        // Improved Type Detection fallback
         if (mimeType === 'application/octet-stream' || !mimeType) {
           if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) mimeType = 'excel';
           else if (filename.endsWith('.docx') || filename.endsWith('.doc')) mimeType = 'word';
@@ -135,39 +181,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           else if (filename.match(/\.(jpg|jpeg|png|webp)$/)) mimeType = 'image/png';
         }
 
-        // 1. Image Processing (Vision)
         if (mimeType.startsWith('image/')) {
           const pngBuffer = await sharp(buffer).png().toBuffer();
-          return {
-            content: [{ type: "image", data: pngBuffer.toString('base64'), mimeType: "image/png" }]
-          };
+          return { content: [{ type: "image", data: pngBuffer.toString('base64'), mimeType: "image/png" }] };
         }
 
-        // 2. Excel -> CSV (Data)
         if (mimeType.includes('spreadsheet') || mimeType.includes('excel') || mimeType === 'excel') {
           const wb = XLSX.read(buffer, { type: 'buffer' });
           const csv = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]], { blankrows: false });
           return { content: [{ type: "text", text: `Sheet: ${wb.SheetNames[0]}\n\n${csv}` }] };
         }
 
-        // 3. Word -> Markdown (Text)
         if (mimeType.includes('wordprocessingml') || mimeType.includes('msword') || mimeType === 'word') {
           const { value: html } = await mammoth.convertToHtml({ buffer });
           const markdown = new TurndownService().turndown(html);
           return { content: [{ type: "text", text: markdown }] };
         }
 
-        // 4. PDF (Metadata/Raw)
         if (mimeType === 'application/pdf') {
           return {
             content: [
-              { type: "text", text: "[PDF Attachment Detected. Claude can process this using its internal tools if the raw bytes are provided.]" },
+              { type: "text", text: "[PDF Attachment Detected.]" },
               { type: "resource", resource: { uri: `attachment://${args.messageId}/${args.attachmentId}`, mimeType: "application/pdf", blob: buffer.toString('base64') } }
             ]
           };
         }
 
-        return { content: [{ type: "text", text: `Downloaded ${filename}. Use vision or text analysis as needed.` }] };
+        return { content: [{ type: "text", text: `Downloaded ${filename}.` }] };
       }
 
       default: throw new Error(`Unknown tool: ${name}`);
@@ -180,4 +220,4 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error("Gmail MCP Server active.");
+console.error("Gmail MCP Server active with Send capabilities.");
