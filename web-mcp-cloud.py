@@ -412,10 +412,8 @@ async def get_page_content() -> str:
 if __name__ == "__main__":
     if TRANSPORT == 'sse':
         # Run with SSE transport for cloud deployment
-        # Use http_app() method for ASGI application
-        import uvicorn
-        app = mcp.http_app()
-        uvicorn.run(app, host='0.0.0.0', port=PORT)
+        # Pass host and port directly to run() method
+        mcp.run(transport='sse', host='0.0.0.0', port=PORT)
     else:
         # Run with stdio transport for local deployment
         mcp.run()
