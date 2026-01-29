@@ -412,10 +412,12 @@ async def get_page_content() -> str:
 if __name__ == "__main__":
     if TRANSPORT == 'sse':
         # Run with SSE transport for cloud deployment
-        # FastMCP reads HOST and PORT from environment variables
-        os.environ['HOST'] = '0.0.0.0'
-        os.environ['PORT'] = str(PORT)
-        mcp.run(transport='sse')
+        # Must bind to 0.0.0.0 for Railway to access it
+        import uvicorn
+        from mcp.server.sse import create_sse_server_app
+        
+        app = create_sse_server_app(mcp._mcp_server)
+        uvicorn.run(app, host='0.0.0.0', port=PORT)
     else:
         # Run with stdio transport for local deployment
         mcp.run()
