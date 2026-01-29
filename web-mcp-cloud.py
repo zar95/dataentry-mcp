@@ -410,11 +410,10 @@ async def get_page_content() -> str:
         return "ERROR"
 
 if __name__ == "__main__":
-    # Set host and port via environment for SSE
     if TRANSPORT == 'sse':
-        os.environ['HOST'] = '0.0.0.0'  # Listen on all interfaces for cloud
-        os.environ['PORT'] = str(PORT)
-        mcp.run(transport='sse')
+        # Run with SSE transport for cloud deployment
+        import uvicorn
+        mcp.run(transport='sse', host='0.0.0.0', port=PORT)
     else:
         # Run with stdio transport for local deployment
         mcp.run()
