@@ -6,19 +6,21 @@ from mcp.server.fastmcp import FastMCP
 from playwright.async_api import async_playwright, Page, Browser, Playwright
 from playwright_stealth import Stealth
 
-# ================== ENV ==================
-
-os.environ["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
+# ================= ENV =================
 
 TRANSPORT = os.getenv("MCP_TRANSPORT", "sse")  # sse for cloud, stdio for local
 HEADLESS = os.getenv("MCP_HEADLESS", "true").lower() == "true"
-PORT = int(os.getenv("PORT", os.getenv("MCP_PORT", "8000")))
 
-# Windows event loop fix (local only)
+# Railway provides PORT automatically
+PORT = os.getenv("PORT")
+if PORT:
+    os.environ["MCP_PORT"] = PORT
+
+# Windows fix (local dev only)
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-# ================== MCP ==================
+# ================= MCP =================
 
 mcp = FastMCP("WebNavigator")
 
@@ -27,7 +29,7 @@ browser: Browser | None = None
 page: Page | None = None
 stealth = Stealth()
 
-# ================== BROWSER ==================
+# ================= BROWSER =================
 
 async def get_page() -> Page:
     global playwright, browser, page
@@ -57,24 +59,7 @@ async def get_page() -> Page:
     await stealth.apply_stealth_async(page)
     return page
 
-# ================== HUMAN MOUSE ==================
-
-async def move_mouse_human_like(page: Page, sx, sy, ex, ey, duration=1.5):
-    steps = int(duration * 60)
-
-    cx1 = sx + (ex - sx) * 0.25 + random.uniform(-40, 40)
-    cy1 = sy + (ey - sy) * 0.25 + random.uniform(-40, 40)
-    cx2 = sx + (ex - sx) * 0.75 + random.uniform(-40, 40)
-    cy2 = sy + (ey - sy) * 0.75 + random.uniform(-40, 40)
-
-    for i in range(steps + 1):
-        t = i / steps
-        x = (1 - t) ** 3 * sx + 3 * (1 - t) ** 2 * t * cx1 + 3 * (1 - t) * t ** 2 * cx2 + t ** 3 * ex
-        y = (1 - t) ** 3 * sy + 3 * (1 - t) ** 2 * t * cy1 + 3 * (1 - t) * t ** 2 * cy2 + t ** 3 * ey
-        await page.mouse.move(x, y)
-        await asyncio.sleep(duration / steps)
-
-# ================== TOOLS ==================
+# ================= TOOLS =================
 
 @mcp.tool()
 async def navigate_to(url: str) -> str:
@@ -99,7 +84,8 @@ async def click_element(selector: str) -> str:
     tx = box["x"] + box["width"] / 2
     ty = box["y"] + box["height"] / 2
 
-    await move_mouse_human_like(p, sx, sy, tx, ty, 1.2)
+    await p.mouse.move(sx, sy)
+    await p.mouse.move(tx, ty)
     await p.mouse.click(tx, ty)
     return "OK"
 
@@ -112,7 +98,7 @@ async def type_text(selector: str, text: str) -> str:
         return "ERROR"
 
     await loc.click()
-    await p.keyboard.type(text, delay=random.randint(40, 120))
+    await p.keyboard.type(text, delay=random.randint(50, 120))
     return "OK"
 
 
@@ -123,16 +109,12 @@ async def get_screenshot() -> str:
     import base64
     return base64.b64encode(img).decode()
 
-# ================== RUN ==================
+# ================= RUN =================
 
 if __name__ == "__main__":
     if TRANSPORT == "sse":
-        import uvicorn
-        uvicorn.run(
-            "web-mcp-cloud:mcp",
-            host="0.0.0.0",
-            port=PORT,
-            log_level="info",
-        )
+        # FastMCP starts its own SSE server (correct for Railway)
+        mcp.run(transport="sse")
     else:
+        # Local stdio mode
         mcp.run()
