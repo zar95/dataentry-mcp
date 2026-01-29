@@ -412,8 +412,16 @@ async def get_page_content() -> str:
 if __name__ == "__main__":
     if TRANSPORT == 'sse':
         # Run with SSE transport for cloud deployment
-        # Pass host and port directly to run() method
-        mcp.run(transport='sse', host='0.0.0.0', port=PORT)
+        # Use uvicorn directly with FastMCP's internal app
+        import uvicorn
+        # FastMCP creates an internal ASGI app when initialized
+        # We need to run it with uvicorn for explicit host/port control
+        uvicorn.run(
+            "web-mcp-cloud:mcp",
+            host='0.0.0.0',
+            port=PORT,
+            log_level="info"
+        )
     else:
         # Run with stdio transport for local deployment
         mcp.run()
