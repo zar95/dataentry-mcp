@@ -1,27 +1,27 @@
+# ===== FORCE RAILWAY HOST & PORT =====
+import os
+
+os.environ["HOST"] = "0.0.0.0"              # bind to all interfaces
+if "PORT" in os.environ:
+    os.environ["MCP_PORT"] = os.environ["PORT"]  # FastMCP will use this
+
+# ===== IMPORTS =====
 import asyncio
 import sys
-import os
 import random
 from mcp.server.fastmcp import FastMCP
 from playwright.async_api import async_playwright, Page, Browser, Playwright
 from playwright_stealth import Stealth
 
-# ================= ENV =================
-
-TRANSPORT = os.getenv("MCP_TRANSPORT", "sse")  # sse for cloud, stdio for local
+# ===== CONFIG =====
+TRANSPORT = os.getenv("MCP_TRANSPORT", "sse")   # cloud = sse
 HEADLESS = os.getenv("MCP_HEADLESS", "true").lower() == "true"
 
-# Railway provides PORT automatically
-PORT = os.getenv("PORT")
-if PORT:
-    os.environ["MCP_PORT"] = PORT
-
-# Windows fix (local dev only)
+# Windows fix (local only)
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-# ================= MCP =================
-
+# ===== MCP =====
 mcp = FastMCP("WebNavigator")
 
 playwright: Playwright | None = None
@@ -29,8 +29,7 @@ browser: Browser | None = None
 page: Page | None = None
 stealth = Stealth()
 
-# ================= BROWSER =================
-
+# ===== BROWSER =====
 async def get_page() -> Page:
     global playwright, browser, page
 
@@ -59,8 +58,7 @@ async def get_page() -> Page:
     await stealth.apply_stealth_async(page)
     return page
 
-# ================= TOOLS =================
-
+# ===== TOOLS =====
 @mcp.tool()
 async def navigate_to(url: str) -> str:
     p = await get_page()
@@ -79,13 +77,8 @@ async def click_element(selector: str) -> str:
     if not box:
         return "ERROR"
 
-    sx = random.uniform(100, 600)
-    sy = random.uniform(100, 400)
     tx = box["x"] + box["width"] / 2
     ty = box["y"] + box["height"] / 2
-
-    await p.mouse.move(sx, sy)
-    await p.mouse.move(tx, ty)
     await p.mouse.click(tx, ty)
     return "OK"
 
@@ -98,7 +91,7 @@ async def type_text(selector: str, text: str) -> str:
         return "ERROR"
 
     await loc.click()
-    await p.keyboard.type(text, delay=random.randint(50, 120))
+    await p.keyboard.type(text, delay=random.randint(60, 120))
     return "OK"
 
 
@@ -109,12 +102,7 @@ async def get_screenshot() -> str:
     import base64
     return base64.b64encode(img).decode()
 
-# ================= RUN =================
-
+# ===== RUN =====
 if __name__ == "__main__":
-    if TRANSPORT == "sse":
-        # FastMCP starts its own SSE server (correct for Railway)
-        mcp.run(transport="sse")
-    else:
-        # Local stdio mode
-        mcp.run()
+    # FastMCP manages SSE server itself
+    mcp.run(transport="sse")
