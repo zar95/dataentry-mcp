@@ -410,13 +410,12 @@ async def get_page_content() -> str:
         return "ERROR"
 
 if __name__ == "__main__":
+    # Set host and port via environment for SSE
     if TRANSPORT == 'sse':
-        # Run with SSE transport for cloud deployment
-        print(f"Starting MCP server with SSE transport on port {PORT}")
-        print(f"Headless mode: {HEADLESS}")
-        mcp.run(transport='sse', port=PORT)
+        os.environ['HOST'] = '0.0.0.0'  # Listen on all interfaces for cloud
+        os.environ['PORT'] = str(PORT)
+        mcp.run(transport='sse')
     else:
         # Run with stdio transport for local deployment
-        print("Starting MCP server with stdio transport")
         mcp.run()
 
