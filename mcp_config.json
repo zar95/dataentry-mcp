@@ -1,0 +1,10 @@
+{
+    "mcpServers": {
+        "web-mcp": {
+            "command": "python",
+            "args": [
+                "C:/Users/Administrator/Desktop/mcp/web-mcp/web-mcp.py"
+            ]
+        }
+    }
+}
