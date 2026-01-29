@@ -412,11 +412,9 @@ async def get_page_content() -> str:
 if __name__ == "__main__":
     if TRANSPORT == 'sse':
         # Run with SSE transport for cloud deployment
-        # Must bind to 0.0.0.0 for Railway to access it
+        # Use http_app() method for ASGI application
         import uvicorn
-        from mcp.server.sse import create_sse_server_app
-        
-        app = create_sse_server_app(mcp._mcp_server)
+        app = mcp.http_app()
         uvicorn.run(app, host='0.0.0.0', port=PORT)
     else:
         # Run with stdio transport for local deployment
