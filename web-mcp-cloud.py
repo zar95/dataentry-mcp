@@ -412,8 +412,10 @@ async def get_page_content() -> str:
 if __name__ == "__main__":
     if TRANSPORT == 'sse':
         # Run with SSE transport for cloud deployment
-        import uvicorn
-        mcp.run(transport='sse', host='0.0.0.0', port=PORT)
+        # FastMCP reads HOST and PORT from environment variables
+        os.environ['HOST'] = '0.0.0.0'
+        os.environ['PORT'] = str(PORT)
+        mcp.run(transport='sse')
     else:
         # Run with stdio transport for local deployment
         mcp.run()
